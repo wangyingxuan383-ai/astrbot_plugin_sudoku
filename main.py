@@ -61,7 +61,7 @@ class SudokuGame:
     names: Dict[str, str]
 
 
-@register(PLUGIN_NAME, "codex", "数独插件（唯一解/持久化）", "1.0.0")
+@register(PLUGIN_NAME, "金幺", "数独插件（唯一解/持久化/本地渲染）", "1.2.0")
 class SudokuPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -298,7 +298,7 @@ class SudokuPlugin(Star):
             "- /数独 A1 5 或 /数独 A11 (在A1填5)\n"
             "- #数独 a15 或 #数独 a21 b23 (批量填)\n"
             "- /数独 排行\n"
-            "- /数独 结束\n"
+            "- /数独 结束（发送本局总结）\n"
         )
 
     async def _get_game(self, event: AstrMessageEvent) -> Optional[SudokuGame]:

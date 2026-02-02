@@ -6,6 +6,9 @@
 - 图片渲染展示棋盘（优先使用PIL本地渲染）
 - 填错扣生命值（默认 3 次，归零结束）
 
+仓库：
+- https://github.com/wangyingxuan383-ai/astrbot_plugin_sudoku
+
 安装：
 1. 复制插件目录到 `AstrBot/data/plugins/astrbot_plugin_sudoku`
 2. 在 AstrBot WebUI 启用插件
@@ -17,7 +20,7 @@
 - `/数独 A1 5` 或 `/数独 A11` 快速填数
 - `#数独 a21 b23` 或 `#数独 a2 1 b2 3` 批量填数
 - `/数独 排行` 查看排行榜
-- `/数独 结束` 结束当前游戏
+- `/数独 结束` 结束当前游戏（会发送本局总结）
 
 指令：
 - /数独 [简单/中等/困难] 开始新游戏

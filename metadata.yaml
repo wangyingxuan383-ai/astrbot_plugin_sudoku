@@ -1,6 +1,12 @@
 ### metadata.yaml ###
 name: astrbot_plugin_sudoku
-desc: 数独插件（唯一解/持久化/本地渲染）
-version: v1.1.0
-author: codex
-repo: https://example.com/astrbot_plugin_sudoku
+desc: |
+  功能：
+
+  生成唯一解数独题目（简单/中等/困难）
+  对局持久化与超时清理
+  图片渲染展示棋盘（优先使用PIL本地渲染）
+  填错扣生命值（默认 3 次，归零结束）
+version: v1.2.0
+author: 金幺
+repo: https://github.com/wangyingxuan383-ai/astrbot_plugin_sudoku
