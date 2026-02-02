@@ -57,6 +57,8 @@ class SudokuGame:
     started_at: int
     last_active: int
     lives: int
+    contributions: Dict[str, Dict[str, int]]
+    names: Dict[str, str]
 
 
 @register(PLUGIN_NAME, "codex", "数独插件（唯一解/持久化）", "1.0.0")
@@ -67,12 +69,15 @@ class SudokuPlugin(Star):
         self.data_dir = Path(get_astrbot_data_path()) / "plugin_data" / PLUGIN_NAME
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.games_path = self.data_dir / "games.json"
+        self.stats_path = self.data_dir / "stats.json"
         self.render_cache_dir = Path(StarTools.get_data_dir(PLUGIN_NAME)) / "cache"
         self.render_cache_dir.mkdir(parents=True, exist_ok=True)
 
         self.games_lock = asyncio.Lock()
+        self.stats_lock = asyncio.Lock()
 
         self.games: Dict[str, SudokuGame] = {}
+        self.stats: Dict[str, Dict] = {"users": {}}
 
         self._cleanup_task: Optional[asyncio.Task] = None
 
@@ -80,6 +85,7 @@ class SudokuPlugin(Star):
         self._renderer = SudokuRenderer(self.conf) if PIL_AVAILABLE else None
 
         self._load_games()
+        self._load_stats()
 
     async def initialize(self):
         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
@@ -116,6 +122,10 @@ class SudokuPlugin(Star):
 
         if sub in ("查看", "show"):
             await self._show_game(event)
+            return
+
+        if sub in ("排行", "排行榜", "rank", "leaderboard"):
+            await self._show_leaderboard(event)
             return
 
         if sub in ("结束", "放弃", "quit", "exit"):
@@ -169,6 +179,8 @@ class SudokuPlugin(Star):
             started_at=now,
             last_active=now,
             lives=lives,
+            contributions={},
+            names={},
         )
         async with self.games_lock:
             self.games[event.unified_msg_origin] = game
@@ -185,12 +197,13 @@ class SudokuPlugin(Star):
 
     async def _end_game(self, event: AstrMessageEvent):
         async with self.games_lock:
-            if event.unified_msg_origin in self.games:
-                self.games.pop(event.unified_msg_origin, None)
-                await self._save_games_locked()
-                await event.send(event.plain_result("已结束当前数独。"))
-            else:
+            game = self.games.get(event.unified_msg_origin)
+            if not game:
                 await event.send(event.plain_result("当前没有进行中的数独。"))
+                return
+            self.games.pop(event.unified_msg_origin, None)
+            await self._save_games_locked()
+        await self._finalize_game(event, game, reason="abort")
 
     async def _fill_cell(
         self,
@@ -228,9 +241,16 @@ class SudokuPlugin(Star):
             await event.send(event.plain_result("该数字与当前盘面冲突。"))
             return False
 
+        user_id = str(event.get_sender_id())
+        user_name = event.get_sender_name()
+        game.names[user_id] = user_name
+        contrib = game.contributions.setdefault(user_id, {"correct": 0, "wrong": 0, "score": 0})
+
         if self.conf.get("check_solution_on_fill", True):
             if game.solution[idx] != str(num):
                 game.lives -= 1
+                contrib["wrong"] += 1
+                contrib["score"] -= int(self.conf.get("score_penalty_wrong", 2))
                 game.last_active = int(time.time())
                 async with self.games_lock:
                     if game.lives <= 0:
@@ -241,6 +261,7 @@ class SudokuPlugin(Star):
                         await self._save_games_locked()
                 if game.lives <= 0:
                     await event.send(event.plain_result("填错次数耗尽，游戏结束。"))
+                    await self._finalize_game(event, game, reason="fail")
                 else:
                     await event.send(
                         event.plain_result(f"该数字与唯一解不符，生命值 -1（剩余 {game.lives}）")
@@ -248,6 +269,8 @@ class SudokuPlugin(Star):
                 return False
 
         grid[idx] = str(num)
+        contrib["correct"] += 1
+        contrib["score"] += int(self.conf.get("score_correct", 1))
         game.grid = "".join(grid)
         game.last_active = int(time.time())
         async with self.games_lock:
@@ -260,6 +283,7 @@ class SudokuPlugin(Star):
             async with self.games_lock:
                 self.games.pop(event.unified_msg_origin, None)
                 await self._save_games_locked()
+            await self._finalize_game(event, game, reason="complete")
             return False
 
         if render:
@@ -273,6 +297,7 @@ class SudokuPlugin(Star):
             "- /数独 查看\n"
             "- /数独 A1 5 或 /数独 A11 (在A1填5)\n"
             "- #数独 a15 或 #数独 a21 b23 (批量填)\n"
+            "- /数独 排行\n"
             "- /数独 结束\n"
         )
 
@@ -385,6 +410,8 @@ class SudokuPlugin(Star):
                     started_at=int(raw.get("started_at", 0)),
                     last_active=int(raw.get("last_active", 0)),
                     lives=int(raw.get("lives", self.conf.get("lives_default", 3))),
+                    contributions=raw.get("contributions", {}) or {},
+                    names=raw.get("names", {}) or {},
                 )
                 if len(game.puzzle) == 81 and len(game.solution) == 81 and len(game.grid) == 81:
                     self.games[key] = game
@@ -401,10 +428,146 @@ class SudokuPlugin(Star):
                 "started_at": v.started_at,
                 "last_active": v.last_active,
                 "lives": v.lives,
+                "contributions": v.contributions,
+                "names": v.names,
             }
             for k, v in self.games.items()
         }
         await self._write_json_atomic(self.games_path, data)
+
+    def _load_stats(self):
+        if not self.stats_path.exists():
+            return
+        try:
+            with self.stats_path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                self.stats = data
+        except Exception as exc:
+            logger.error(f"读取数独统计失败: {exc}")
+
+    async def _save_stats(self):
+        async with self.stats_lock:
+            await self._write_json_atomic(self.stats_path, self.stats)
+
+    def _get_user_stat(self, user_id: str, name: str) -> Dict[str, any]:
+        users = self.stats.setdefault("users", {})
+        stat = users.get(user_id)
+        if not stat:
+            stat = {
+                "name": name,
+                "score": 0,
+                "wins": {"easy": 0, "medium": 0, "hard": 0},
+                "total_time": 0,
+                "errors": 0,
+                "games": 0,
+            }
+            users[user_id] = stat
+        stat["name"] = name or stat.get("name", user_id)
+        return stat
+
+    @staticmethod
+    def _format_duration(seconds: int) -> str:
+        minutes, sec = divmod(max(0, seconds), 60)
+        return f"{minutes:02d}:{sec:02d}"
+
+    async def _finalize_game(self, event: AstrMessageEvent, game: SudokuGame, reason: str):
+        now = int(time.time())
+        elapsed = self._format_duration(now - game.started_at)
+        contributions = game.contributions or {}
+        names = game.names or {}
+
+        def display_name(uid: str) -> str:
+            return names.get(uid) or uid
+
+        top_user = None
+        top_correct = -1
+        for uid, stat in contributions.items():
+            correct = int(stat.get("correct", 0))
+            if correct > top_correct:
+                top_correct = correct
+                top_user = uid
+
+        wrong_list = [
+            f"{display_name(uid)}({stat.get('wrong', 0)})"
+            for uid, stat in contributions.items()
+            if int(stat.get("wrong", 0)) > 0
+        ]
+        wrong_text = "、".join(wrong_list) if wrong_list else "无"
+
+        # Update stats
+        if contributions:
+            for uid, stat in contributions.items():
+                user_name = display_name(uid)
+                user_stat = self._get_user_stat(uid, user_name)
+                user_stat["score"] += int(stat.get("score", 0))
+                user_stat["errors"] += int(stat.get("wrong", 0))
+                user_stat["games"] += 1
+
+        if reason == "complete" and top_user:
+            bonus = int(self.conf.get(f"score_bonus_{game.difficulty}", 10))
+            winner_stat = self._get_user_stat(top_user, display_name(top_user))
+            winner_stat["score"] += bonus
+            winner_stat["wins"][game.difficulty] = winner_stat["wins"].get(game.difficulty, 0) + 1
+            winner_stat["total_time"] += now - game.started_at
+
+        await self._save_stats()
+
+        participants_lines = []
+        for uid, stat in contributions.items():
+            participants_lines.append(
+                f"- {display_name(uid)} 正确{stat.get('correct',0)} 错误{stat.get('wrong',0)} 分数{stat.get('score',0)}"
+            )
+        participants_text = "\n".join(participants_lines) if participants_lines else "无"
+
+        top_text = (
+            f"{display_name(top_user)}（正确 {top_correct} 次）" if top_user else "无"
+        )
+        result_label = "完成" if reason == "complete" else "结束"
+        if reason == "fail":
+            result_label = "失败"
+
+        summary = (
+            f"本局{result_label}（{DIFFICULTIES[game.difficulty]['label']}）\n"
+            f"用时：{elapsed}\n"
+            f"贡献最多：{top_text}\n"
+            f"扣命出错：{wrong_text}\n"
+            f"参与记录：\n{participants_text}"
+        )
+        await event.send(event.plain_result(summary))
+
+    async def _show_leaderboard(self, event: AstrMessageEvent):
+        users = self.stats.get("users", {})
+        if not users:
+            await event.send(event.plain_result("暂无排行榜数据。"))
+            return
+
+        entries = []
+        for uid, stat in users.items():
+            wins = stat.get("wins", {})
+            total_wins = sum(int(v) for v in wins.values())
+            total_time = int(stat.get("total_time", 0))
+            avg_time = total_time // total_wins if total_wins > 0 else 999999
+            entries.append(
+                (
+                    int(stat.get("score", 0)),
+                    avg_time,
+                    uid,
+                    stat,
+                )
+            )
+        entries.sort(key=lambda x: (-x[0], x[1]))
+
+        lines = ["数独排行榜（按分数/平均用时）："]
+        for idx, (score, avg_time, uid, stat) in enumerate(entries[:10], start=1):
+            wins = stat.get("wins", {})
+            total_wins = sum(int(v) for v in wins.values())
+            avg_time_str = self._format_duration(avg_time) if total_wins > 0 else "--:--"
+            lines.append(
+                f"{idx}. {stat.get('name', uid)} 分数{score} 平均用时{avg_time_str} "
+                f"胜场(简{wins.get('easy',0)}/中{wins.get('medium',0)}/难{wins.get('hard',0)})"
+            )
+        await event.send(event.plain_result("\n".join(lines)))
 
     async def _write_json_atomic(self, path: Path, data: dict):
         tmp_path = path.with_suffix(path.suffix + ".tmp")

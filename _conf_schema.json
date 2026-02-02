@@ -24,6 +24,31 @@
     "type": "int",
     "default": 3
   },
+  "score_correct": {
+    "description": "每次正确填数得分",
+    "type": "int",
+    "default": 1
+  },
+  "score_penalty_wrong": {
+    "description": "每次填错扣分",
+    "type": "int",
+    "default": 2
+  },
+  "score_bonus_easy": {
+    "description": "简单难度通关加分",
+    "type": "int",
+    "default": 10
+  },
+  "score_bonus_medium": {
+    "description": "中等难度通关加分",
+    "type": "int",
+    "default": 20
+  },
+  "score_bonus_hard": {
+    "description": "困难难度通关加分",
+    "type": "int",
+    "default": 30
+  },
   "image_cell_size": {
     "description": "渲染格子像素大小",
     "type": "int",
