@@ -1,6 +1,6 @@
 ### metadata.yaml ###
 name: astrbot_plugin_sudoku
-desc: |
+desc: |-
   功能：
 
   生成唯一解数独题目（简单/中等/困难）
