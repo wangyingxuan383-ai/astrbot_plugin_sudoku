@@ -135,11 +135,11 @@ class SudokuPlugin(Star):
 
         yield event.plain_result("未识别的指令。输入 /数独 帮助 查看用法。")
 
-    @filter.regex(r"^#数独\s*[A-Ia-i][1-9]\s*[1-9]$")
+    @filter.regex(r"^[#＃]+数独\s*[A-Ia-i][1-9]\s*[1-9]$")
     async def sudoku_quick_fill(self, event: AstrMessageEvent):
         event.stop_event()
         text = (event.message_str or "").strip()
-        match = re.match(r"^#数独\s*([A-Ia-i])([1-9])\s*([1-9])$", text)
+        match = re.match(r"^[#＃]+数独\s*([A-Ia-i])([1-9])\s*([1-9])$", text)
         if not match:
             return
         cell = f"{match.group(1)}{match.group(2)}"
