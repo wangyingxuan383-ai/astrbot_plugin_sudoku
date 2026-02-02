@@ -121,6 +121,12 @@ class SudokuPlugin(Star):
             await self._end_game(event)
             return
 
+        quick = self._parse_quick_fill_token(tokens[0])
+        if quick:
+            cell, value = quick
+            await self._fill_cell(event, cell, value)
+            return
+
         if sub in ("填", "填入", "set"):
             if len(tokens) < 3:
                 yield event.plain_result("用法：/数独 填 A1 5 或 #数独 a15")
@@ -272,6 +278,15 @@ class SudokuPlugin(Star):
         col = ord(col_char) - ord("A")
         row = int(row_char) - 1
         return row * 9 + col
+
+    def _parse_quick_fill_token(self, token: str) -> Optional[Tuple[str, str]]:
+        token = token.strip()
+        match = re.match(r"^([A-Ia-i])([1-9])([1-9])$", token)
+        if not match:
+            return None
+        cell = f"{match.group(1)}{match.group(2)}"
+        value = match.group(3)
+        return cell, value
 
 
     async def _cleanup_loop(self):
