@@ -1,0 +1,42 @@
+{
+  "generation_timeout_seconds": {
+    "description": "生成单题超时秒数",
+    "type": "int",
+    "default": 5
+  },
+  "game_ttl_minutes": {
+    "description": "对局无操作清理分钟",
+    "type": "int",
+    "default": 120
+  },
+  "cleanup_interval_minutes": {
+    "description": "清理任务间隔分钟",
+    "type": "int",
+    "default": 10
+  },
+  "check_solution_on_fill": {
+    "description": "填数时校验与唯一解一致",
+    "type": "bool",
+    "default": true
+  },
+  "image_cell_size": {
+    "description": "渲染格子像素大小",
+    "type": "int",
+    "default": 48
+  },
+  "font_path": {
+    "description": "字体路径（可选，支持相对插件目录）",
+    "type": "string",
+    "default": "assets/LXGWWenKai-Regular.ttf"
+  },
+  "use_pil_renderer": {
+    "description": "优先使用PIL本地渲染（更快）",
+    "type": "bool",
+    "default": true
+  },
+  "replace_last_image": {
+    "description": "aiocqhttp下替换上一次棋盘图片",
+    "type": "bool",
+    "default": true
+  }
+}
