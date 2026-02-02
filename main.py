@@ -122,15 +122,14 @@ class SudokuPlugin(Star):
             await self._end_game(event)
             return
 
-        quick = self._parse_quick_fill_token(tokens[0])
-        if quick:
-            cell, value = quick
-            await self._fill_cell(event, cell, value)
+        fill_pairs = self._parse_fill_pairs(tokens)
+        if fill_pairs:
+            await self._apply_fill_pairs(event, fill_pairs)
             return
 
         if sub in ("填", "填入", "set"):
             if len(tokens) < 3:
-                yield event.plain_result("用法：/数独 填 A1 5 或 #数独 a15")
+                yield event.plain_result("用法：/数独 A1 5 或 #数独 a15 / #数独 a21 b23")
                 return
             await self._fill_cell(event, tokens[1], tokens[2])
             return
@@ -142,16 +141,17 @@ class SudokuPlugin(Star):
 
         yield event.plain_result("未识别的指令。输入 /数独 帮助 查看用法。")
 
-    @filter.regex(r"^[#＃]+数独\s*[A-Ia-i][1-9]\s*[1-9]$")
+    @filter.regex(r"^[#＃]+数独\\b.*")
     async def sudoku_quick_fill(self, event: AstrMessageEvent):
         event.stop_event()
         text = (event.message_str or "").strip()
-        match = re.match(r"^[#＃]+数独\s*([A-Ia-i])([1-9])\s*([1-9])$", text)
-        if not match:
+        rest = re.sub(r"^[#＃]+数独\s*", "", text)
+        tokens = rest.split()
+        if not tokens:
             return
-        cell = f"{match.group(1)}{match.group(2)}"
-        value = match.group(3)
-        await self._fill_cell(event, cell, value)
+        fill_pairs = self._parse_fill_pairs(tokens)
+        if fill_pairs:
+            await self._apply_fill_pairs(event, fill_pairs)
 
     async def _start_game(self, event: AstrMessageEvent, difficulty: str):
         puzzle = await self._generate_puzzle(difficulty)
@@ -192,35 +192,41 @@ class SudokuPlugin(Star):
             else:
                 await event.send(event.plain_result("当前没有进行中的数独。"))
 
-    async def _fill_cell(self, event: AstrMessageEvent, cell: str, value: str):
+    async def _fill_cell(
+        self,
+        event: AstrMessageEvent,
+        cell: str,
+        value: str,
+        render: bool = True,
+    ) -> bool:
         game = await self._get_game(event)
         if not game:
             await event.send(event.plain_result("当前没有进行中的数独。"))
-            return
+            return False
 
         idx = self._parse_cell(cell)
         if idx is None:
             await event.send(event.plain_result("格子格式错误，请使用 A1-I9。"))
-            return
+            return False
 
         try:
             num = int(value)
         except ValueError:
             await event.send(event.plain_result("请输入 1-9 的数字。"))
-            return
+            return False
 
         if num < 1 or num > 9:
             await event.send(event.plain_result("请输入 1-9 的数字。"))
-            return
+            return False
 
         if game.puzzle[idx] != "0":
             await event.send(event.plain_result("这是题目给定的格子，不能修改。"))
-            return
+            return False
 
         grid = list(game.grid)
         if not self._is_valid_move(grid, idx, str(num)):
             await event.send(event.plain_result("该数字与当前盘面冲突。"))
-            return
+            return False
 
         if self.conf.get("check_solution_on_fill", True):
             if game.solution[idx] != str(num):
@@ -239,7 +245,7 @@ class SudokuPlugin(Star):
                     await event.send(
                         event.plain_result(f"该数字与唯一解不符，生命值 -1（剩余 {game.lives}）")
                     )
-                return
+                return False
 
         grid[idx] = str(num)
         game.grid = "".join(grid)
@@ -249,21 +255,24 @@ class SudokuPlugin(Star):
             await self._save_games_locked()
 
         if "0" not in game.grid and game.grid == game.solution:
-            await self._send_game_image(event, game, "恭喜完成！")
+            if render:
+                await self._send_game_image(event, game, "恭喜完成！")
             async with self.games_lock:
                 self.games.pop(event.unified_msg_origin, None)
                 await self._save_games_locked()
-            return
+            return False
 
-        await self._send_game_image(event, game, "已更新")
+        if render:
+            await self._send_game_image(event, game, "已更新")
+        return True
 
     def _help_text(self) -> str:
         return (
             "数独指令：\n"
             "- /数独 [简单/中等/困难] 开始新游戏\n"
             "- /数独 查看\n"
-            "- /数独 填 A1 5\n"
-            "- #数独 a15 (在A1填5)\n"
+            "- /数独 A1 5 或 /数独 A11 (在A1填5)\n"
+            "- #数独 a15 或 #数独 a21 b23 (批量填)\n"
             "- /数独 结束\n"
         )
 
@@ -304,6 +313,35 @@ class SudokuPlugin(Star):
         cell = f"{match.group(1)}{match.group(2)}"
         value = match.group(3)
         return cell, value
+
+    def _parse_fill_pairs(self, tokens: List[str]) -> Optional[List[Tuple[str, str]]]:
+        pairs: List[Tuple[str, str]] = []
+        i = 0
+        while i < len(tokens):
+            token = tokens[i]
+            compact = self._parse_quick_fill_token(token)
+            if compact:
+                pairs.append(compact)
+                i += 1
+                continue
+            if re.match(r"^[A-Ia-i][1-9]$", token):
+                if i + 1 >= len(tokens):
+                    break
+                value = tokens[i + 1]
+                if not re.match(r"^[1-9]$", value):
+                    break
+                pairs.append((token, value))
+                i += 2
+                continue
+            break
+        return pairs if pairs else None
+
+    async def _apply_fill_pairs(self, event: AstrMessageEvent, pairs: List[Tuple[str, str]]):
+        for idx, (cell, value) in enumerate(pairs):
+            is_last = idx == len(pairs) - 1
+            ok = await self._fill_cell(event, cell, value, render=is_last)
+            if not ok:
+                break
 
 
     async def _cleanup_loop(self):
@@ -619,7 +657,7 @@ class SudokuPlugin(Star):
                 row_cells.append(
                     {
                         "value": "" if value == "0" else value,
-                        "class": " ".join(classes),
+                        "class": " ".join(classes + ([f"n{value}"] if value != "0" else [])),
                     }
                 )
             cells.append(row_cells)
@@ -646,7 +684,8 @@ class SudokuPlugin(Star):
 <style>
 body { margin: 0; font-family: "Noto Sans", "Microsoft YaHei", sans-serif; }
 .container { padding: 14px 18px; background: linear-gradient(180deg, #f7f3ea 0%, #e7dccb 100%); }
-.header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
+.header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 2px; }
+.subheader { text-align: center; font-size: 13px; color: #666; margin-bottom: 8px; }
 .title { font-size: 20px; font-weight: 700; color: #222; }
 .meta { font-size: 14px; color: #555; }
 .card { display: inline-block; padding: 10px; background: #fcfbf7; border: 1px solid #d1c6b8; border-radius: 12px; box-shadow: 0 6px 12px rgba(0,0,0,0.12); }
@@ -663,6 +702,15 @@ body { margin: 0; font-family: "Noto Sans", "Microsoft YaHei", sans-serif; }
 .sudoku td.given { color: #111; font-weight: 700; }
 .sudoku td.user { color: #1a5fd1; font-weight: 600; }
 .sudoku td.empty { color: #aaa; }
+.sudoku td.n1 { color: #1f77b4; font-weight: 700; }
+.sudoku td.n2 { color: #2ca02c; font-weight: 700; }
+.sudoku td.n3 { color: #d62728; font-weight: 700; }
+.sudoku td.n4 { color: #9467bd; font-weight: 700; }
+.sudoku td.n5 { color: #8c564b; font-weight: 700; }
+.sudoku td.n6 { color: #17becf; font-weight: 700; }
+.sudoku td.n7 { color: #111111; font-weight: 700; }
+.sudoku td.n8 { color: #7f7f7f; font-weight: 700; }
+.sudoku td.n9 { color: #ff7f0e; font-weight: 700; }
 .sudoku td.br { border-right: 3px solid #111; }
 .sudoku td.bb { border-bottom: 3px solid #111; }
 .sudoku th.br { border-right: 3px solid #111; }
@@ -673,9 +721,9 @@ body { margin: 0; font-family: "Noto Sans", "Microsoft YaHei", sans-serif; }
   <div class="container">
     <div class="header">
       <div class="title">{{ title }} · {{ difficulty }}</div>
-      <div class="meta">{{ tip }}</div>
       <div class="meta">进度 {{ progress }} · 生命 {{ lives }}</div>
     </div>
+    <div class="subheader">{{ tip }}</div>
     <div class="card">
       <table class="sudoku">
         <tr>
@@ -708,11 +756,22 @@ if PIL_AVAILABLE:
             self.cell_size = int(config.get("image_cell_size", 48))
             self.padding = max(8, int(self.cell_size * 0.25))
             self.label_size = max(12, int(self.cell_size * 0.45))
-            self.header_height = max(26, int(self.cell_size * 0.75))
+            self.header_height = max(40, int(self.cell_size * 1.2))
             self.font_path = self._resolve_font_path(config)
             self.font_cell = self._load_font(int(self.cell_size * 0.6))
             self.font_label = self._load_font(int(self.cell_size * 0.35))
             self.font_header = self._load_font(int(self.cell_size * 0.45))
+            self.number_colors = {
+                "1": "#1f77b4",
+                "2": "#2ca02c",
+                "3": "#d62728",
+                "4": "#9467bd",
+                "5": "#8c564b",
+                "6": "#17becf",
+                "7": "#111111",
+                "8": "#7f7f7f",
+                "9": "#ff7f0e",
+            }
 
         def _resolve_font_path(self, config: AstrBotConfig) -> str:
             raw = str(config.get("font_path", "")).strip()
@@ -757,15 +816,22 @@ if PIL_AVAILABLE:
             progress = f"{81 - game.grid.count('0')}/81"
             header_text = f"{title} · {DIFFICULTIES[game.difficulty]['label']}"
             tip_text = "#数独 a11填数"
-            draw.text((pad, pad), header_text, font=self.font_header, fill="#2a2a2a")
+            line1_y = pad
+            line2_y = pad + self.font_header.size + 4
+            draw.text((pad, line1_y), header_text, font=self.font_header, fill="#2a2a2a")
+            draw.text(
+                (width - pad - 140, line1_y),
+                f"进度 {progress} 生命 {game.lives}",
+                font=self.font_label,
+                fill="#555",
+            )
             self._draw_centered(
                 draw,
                 tip_text,
-                (width / 2, pad + self.font_header.size / 2),
+                (width / 2, line2_y + self.font_label.size / 2),
                 self.font_label,
                 "#666",
             )
-            draw.text((width - pad - 120, pad), f"进度 {progress} 生命 {game.lives}", font=self.font_label, fill="#555")
 
             board_x = pad + label
             board_y = pad + header + label
@@ -804,11 +870,10 @@ if PIL_AVAILABLE:
                     val = game.grid[idx]
                     if val == "0":
                         continue
-                    given = game.puzzle[idx] != "0"
-                    color = "#111" if given else "#1a5fd1"
+                    color = self.number_colors.get(val, "#111")
                     x = board_x + c * cell + cell / 2
                     y = board_y + r * cell + cell / 2
-                    self._draw_centered(draw, val, (x, y), self.font_cell, color)
+                    self._draw_bold_centered(draw, val, (x, y), self.font_cell, color)
 
             return img
 
@@ -864,5 +929,16 @@ if PIL_AVAILABLE:
             x = center[0] - w / 2
             y = center[1] - h / 2
             draw.text((x, y), text, font=font, fill=fill)
+
+        def _draw_bold_centered(
+            self,
+            draw: ImageDraw.ImageDraw,
+            text: str,
+            center: tuple[float, float],
+            font: ImageFont.ImageFont,
+            fill: str,
+        ):
+            self._draw_centered(draw, text, (center[0] + 0.6, center[1]), font, fill)
+            self._draw_centered(draw, text, (center[0], center[1] + 0.6), font, fill)
 else:
     SudokuRenderer = None  # type: ignore
