@@ -19,6 +19,11 @@
     "type": "bool",
     "default": true
   },
+  "lives_default": {
+    "description": "默认生命值（填错扣1，归零结束）",
+    "type": "int",
+    "default": 3
+  },
   "image_cell_size": {
     "description": "渲染格子像素大小",
     "type": "int",

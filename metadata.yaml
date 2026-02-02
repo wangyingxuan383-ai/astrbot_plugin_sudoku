@@ -1,6 +1,6 @@
 ### metadata.yaml ###
 name: astrbot_plugin_sudoku
 desc: 数独插件（唯一解/持久化/本地渲染）
-version: v1.0.0
+version: v1.1.0
 author: codex
 repo: https://example.com/astrbot_plugin_sudoku

@@ -56,6 +56,7 @@ class SudokuGame:
     difficulty: str
     started_at: int
     last_active: int
+    lives: int
 
 
 @register(PLUGIN_NAME, "codex", "数独插件（唯一解/持久化）", "1.0.0")
@@ -159,6 +160,7 @@ class SudokuPlugin(Star):
             return
 
         now = int(time.time())
+        lives = max(1, int(self.conf.get("lives_default", 3)))
         game = SudokuGame(
             puzzle=puzzle["puzzle"],
             solution=puzzle["solution"],
@@ -166,6 +168,7 @@ class SudokuPlugin(Star):
             difficulty=difficulty,
             started_at=now,
             last_active=now,
+            lives=lives,
         )
         async with self.games_lock:
             self.games[event.unified_msg_origin] = game
@@ -221,7 +224,21 @@ class SudokuPlugin(Star):
 
         if self.conf.get("check_solution_on_fill", True):
             if game.solution[idx] != str(num):
-                await event.send(event.plain_result("该数字与唯一解不符。"))
+                game.lives -= 1
+                game.last_active = int(time.time())
+                async with self.games_lock:
+                    if game.lives <= 0:
+                        self.games.pop(event.unified_msg_origin, None)
+                        await self._save_games_locked()
+                    else:
+                        self.games[event.unified_msg_origin] = game
+                        await self._save_games_locked()
+                if game.lives <= 0:
+                    await event.send(event.plain_result("填错次数耗尽，游戏结束。"))
+                else:
+                    await event.send(
+                        event.plain_result(f"该数字与唯一解不符，生命值 -1（剩余 {game.lives}）")
+                    )
                 return
 
         grid[idx] = str(num)
@@ -329,6 +346,7 @@ class SudokuPlugin(Star):
                     difficulty=raw.get("difficulty", "medium"),
                     started_at=int(raw.get("started_at", 0)),
                     last_active=int(raw.get("last_active", 0)),
+                    lives=int(raw.get("lives", self.conf.get("lives_default", 3))),
                 )
                 if len(game.puzzle) == 81 and len(game.solution) == 81 and len(game.grid) == 81:
                     self.games[key] = game
@@ -344,6 +362,7 @@ class SudokuPlugin(Star):
                 "difficulty": v.difficulty,
                 "started_at": v.started_at,
                 "last_active": v.last_active,
+                "lives": v.lives,
             }
             for k, v in self.games.items()
         }
@@ -615,6 +634,8 @@ class SudokuPlugin(Star):
             "cell_size": cell_size,
             "font_size": font_size,
             "progress": progress,
+            "lives": game.lives,
+            "tip": "#数独 a11填数",
         }
 
         html = """
@@ -652,7 +673,8 @@ body { margin: 0; font-family: "Noto Sans", "Microsoft YaHei", sans-serif; }
   <div class="container">
     <div class="header">
       <div class="title">{{ title }} · {{ difficulty }}</div>
-      <div class="meta">进度 {{ progress }}</div>
+      <div class="meta">{{ tip }}</div>
+      <div class="meta">进度 {{ progress }} · 生命 {{ lives }}</div>
     </div>
     <div class="card">
       <table class="sudoku">
@@ -734,8 +756,16 @@ if PIL_AVAILABLE:
 
             progress = f"{81 - game.grid.count('0')}/81"
             header_text = f"{title} · {DIFFICULTIES[game.difficulty]['label']}"
+            tip_text = "#数独 a11填数"
             draw.text((pad, pad), header_text, font=self.font_header, fill="#2a2a2a")
-            draw.text((width - pad - 120, pad), f"进度 {progress}", font=self.font_label, fill="#555")
+            self._draw_centered(
+                draw,
+                tip_text,
+                (width / 2, pad + self.font_header.size / 2),
+                self.font_label,
+                "#666",
+            )
+            draw.text((width - pad - 120, pad), f"进度 {progress} 生命 {game.lives}", font=self.font_label, fill="#555")
 
             board_x = pad + label
             board_y = pad + header + label
